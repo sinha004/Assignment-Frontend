@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
@@ -22,6 +22,18 @@ export default function CampaignDetailsPage() {
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [n8nConnected, setN8nConnected] = useState(null);
   const [actionMessage, setActionMessage] = useState(null);
+
+  // New states for scheduling and execution
+  const [progress, setProgress] = useState(null);
+  const [progressLoading, setProgressLoading] = useState(false);
+  const [executions, setExecutions] = useState(null);
+  const [executionsLoading, setExecutionsLoading] = useState(false);
+  const [executionFilter, setExecutionFilter] = useState('');
+  const [executionPage, setExecutionPage] = useState(1);
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [runNowLoading, setRunNowLoading] = useState(false);
+  const [pauseResumeLoading, setPauseResumeLoading] = useState(false);
 
   useEffect(() => {
     // Wait for auth to finish loading before checking
@@ -168,6 +180,158 @@ export default function CampaignDetailsPage() {
     }
   }, [activeTab, campaign?.n8nWorkflowId]);
 
+  // Fetch campaign progress
+  const fetchProgress = useCallback(async () => {
+    if (!params.id) return;
+    setProgressLoading(true);
+    try {
+      const response = await api.get(`/campaigns/${params.id}/progress`);
+      setProgress(response.data);
+    } catch (err) {
+      console.error('Failed to fetch progress:', err);
+    } finally {
+      setProgressLoading(false);
+    }
+  }, [params.id]);
+
+  // Fetch execution records
+  const fetchExecutions = useCallback(async () => {
+    if (!params.id) return;
+    setExecutionsLoading(true);
+    try {
+      const queryParams = new URLSearchParams();
+      if (executionFilter) queryParams.set('status', executionFilter);
+      queryParams.set('page', executionPage.toString());
+      queryParams.set('limit', '20');
+      
+      const response = await api.get(`/campaigns/${params.id}/executions?${queryParams}`);
+      setExecutions(response.data);
+    } catch (err) {
+      console.error('Failed to fetch executions:', err);
+    } finally {
+      setExecutionsLoading(false);
+    }
+  }, [params.id, executionFilter, executionPage]);
+
+  // Fetch progress when execution tab is active
+  useEffect(() => {
+    if (activeTab === 'execution' && campaign) {
+      fetchProgress();
+      fetchExecutions();
+    }
+  }, [activeTab, campaign?.id, fetchProgress, fetchExecutions]);
+
+  // Refetch executions when filter or page changes
+  useEffect(() => {
+    if (activeTab === 'execution' && campaign) {
+      fetchExecutions();
+    }
+  }, [executionFilter, executionPage, activeTab, campaign, fetchExecutions]);
+
+  // Auto-refresh progress every 5 seconds when campaign is running
+  useEffect(() => {
+    let interval;
+    if (activeTab === 'execution' && campaign?.status === 'running') {
+      interval = setInterval(() => {
+        fetchProgress();
+        fetchExecutions();
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [activeTab, campaign?.status, fetchProgress, fetchExecutions]);
+
+  // Schedule campaign
+  const handleScheduleCampaign = async () => {
+    if (!scheduledAt) {
+      setActionMessage({ type: 'error', text: 'Please select a date and time' });
+      return;
+    }
+    
+    setScheduleLoading(true);
+    setActionMessage(null);
+    try {
+      await api.post(`/campaigns/${params.id}/schedule`, {
+        scheduledAt: new Date(scheduledAt).toISOString()
+      });
+      setActionMessage({ type: 'success', text: 'Campaign scheduled successfully!' });
+      await fetchCampaign();
+    } catch (err) {
+      setActionMessage({ type: 'error', text: err.response?.data?.message || 'Failed to schedule campaign' });
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
+
+  // Run campaign now
+  const handleRunCampaignNow = async () => {
+    if (!confirm('This will start the campaign immediately. Continue?')) return;
+    
+    setRunNowLoading(true);
+    setActionMessage(null);
+    try {
+      await api.post(`/campaigns/${params.id}/run-now`);
+      setActionMessage({ type: 'success', text: 'Campaign started successfully!' });
+      await fetchCampaign();
+      setActiveTab('execution');
+    } catch (err) {
+      setActionMessage({ type: 'error', text: err.response?.data?.message || 'Failed to start campaign' });
+    } finally {
+      setRunNowLoading(false);
+    }
+  };
+
+  // Pause campaign
+  const handlePauseCampaign = async () => {
+    if (!confirm('This will pause the campaign. Continue?')) return;
+    
+    setPauseResumeLoading(true);
+    setActionMessage(null);
+    try {
+      await api.post(`/campaigns/${params.id}/pause`);
+      setActionMessage({ type: 'success', text: 'Campaign paused' });
+      await fetchCampaign();
+      await fetchProgress();
+    } catch (err) {
+      setActionMessage({ type: 'error', text: err.response?.data?.message || 'Failed to pause campaign' });
+    } finally {
+      setPauseResumeLoading(false);
+    }
+  };
+
+  // Resume campaign
+  const handleResumeCampaign = async () => {
+    if (!confirm('This will resume the campaign. Continue?')) return;
+    
+    setPauseResumeLoading(true);
+    setActionMessage(null);
+    try {
+      await api.post(`/campaigns/${params.id}/resume`);
+      setActionMessage({ type: 'success', text: 'Campaign resumed' });
+      await fetchCampaign();
+      await fetchProgress();
+    } catch (err) {
+      setActionMessage({ type: 'error', text: err.response?.data?.message || 'Failed to resume campaign' });
+    } finally {
+      setPauseResumeLoading(false);
+    }
+  };
+
+  // Retry failed executions
+  const handleRetryFailed = async () => {
+    if (!confirm('This will retry all failed executions. Continue?')) return;
+    
+    setActionMessage(null);
+    try {
+      const response = await api.post(`/campaigns/${params.id}/retry-failed`);
+      setActionMessage({ type: 'success', text: response.data.message });
+      await fetchCampaign();
+      await fetchProgress();
+      await fetchExecutions();
+    } catch (err) {
+      setActionMessage({ type: 'error', text: err.response?.data?.message || 'Failed to retry executions' });
+    }
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#cad6ec] via-white to-[#5fcde0] flex items-center justify-center">
@@ -279,6 +443,21 @@ export default function CampaignDetailsPage() {
               Flow Builder
             </button>
             <button
+              onClick={() => setActiveTab('execution')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'execution'
+                  ? 'border-[#526bb0] text-[#526bb0]'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Execution
+              {campaign?.status === 'running' && (
+                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                  Live
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => setActiveTab('analytics')}
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'analytics'
@@ -366,6 +545,158 @@ export default function CampaignDetailsPage() {
                     </button>
                   </div>
                 </dl>
+              </div>
+            </div>
+
+            {/* Scheduling & Execution Controls */}
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h3 className="text-lg font-semibold text-[#041d36] mb-4 flex items-center gap-2">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Campaign Execution
+              </h3>
+
+              {/* Action Message */}
+              {actionMessage && (
+                <div className={`rounded-lg p-4 mb-4 ${
+                  actionMessage.type === 'success' 
+                    ? 'bg-green-50 border border-green-200 text-green-700' 
+                    : 'bg-red-50 border border-red-200 text-red-700'
+                }`}>
+                  {actionMessage.text}
+                </div>
+              )}
+
+              {/* Workflow Status Check */}
+              {!campaign.n8nWorkflowId && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                  <p className="text-yellow-800">
+                    ⚠️ You need to create and deploy a workflow before you can run this campaign.{' '}
+                    <button 
+                      onClick={() => setActiveTab('flow')} 
+                      className="font-medium underline hover:text-yellow-900"
+                    >
+                      Go to Flow Builder →
+                    </button>
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Schedule Section */}
+                <div className="border border-gray-200 rounded-lg p-4">
+                  <h4 className="font-medium text-[#041d36] mb-3">Schedule Campaign</h4>
+                  
+                  {campaign.scheduledAt && (
+                    <div className="mb-3 bg-blue-50 border border-blue-200 rounded p-3">
+                      <p className="text-sm text-blue-800">
+                        <strong>Scheduled for:</strong> {formatDate(campaign.scheduledAt)}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <input
+                      type="datetime-local"
+                      value={scheduledAt}
+                      onChange={(e) => setScheduledAt(e.target.value)}
+                      disabled={!campaign.n8nWorkflowId || ['running', 'completed'].includes(campaign.status)}
+                      min={new Date().toISOString().slice(0, 16)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#526bb0] focus:border-transparent outline-none transition text-[#041d36] disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    />
+                    <button
+                      onClick={handleScheduleCampaign}
+                      disabled={scheduleLoading || !campaign.n8nWorkflowId || ['running', 'completed'].includes(campaign.status)}
+                      className="w-full bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-600 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {scheduleLoading ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-white"></div>
+                      ) : (
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      )}
+                      {campaign.scheduledAt ? 'Reschedule' : 'Schedule Campaign'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Run Now Section */}
+                <div className="border border-gray-200 rounded-lg p-4">
+                  <h4 className="font-medium text-[#041d36] mb-3">Quick Actions</h4>
+                  
+                  <div className="space-y-3">
+                    {/* Run Now Button */}
+                    {['draft', 'scheduled', 'failed'].includes(campaign.status) && (
+                      <button
+                        onClick={handleRunCampaignNow}
+                        disabled={runNowLoading || !campaign.n8nWorkflowId}
+                        className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white px-4 py-2 rounded-lg font-semibold hover:shadow-lg transition-all disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {runNowLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-white"></div>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        Run Campaign Now
+                      </button>
+                    )}
+
+                    {/* Pause Button */}
+                    {campaign.status === 'running' && (
+                      <button
+                        onClick={handlePauseCampaign}
+                        disabled={pauseResumeLoading}
+                        className="w-full bg-yellow-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-yellow-600 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {pauseResumeLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-white"></div>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        Pause Campaign
+                      </button>
+                    )}
+
+                    {/* Resume Button */}
+                    {campaign.status === 'paused' && (
+                      <button
+                        onClick={handleResumeCampaign}
+                        disabled={pauseResumeLoading}
+                        className="w-full bg-green-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-600 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {pauseResumeLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-white"></div>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        Resume Campaign
+                      </button>
+                    )}
+
+                    {/* View Execution Button */}
+                    {['running', 'paused', 'completed', 'failed'].includes(campaign.status) && (
+                      <button
+                        onClick={() => setActiveTab('execution')}
+                        className="w-full bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-semibold hover:bg-gray-200 transition-all flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                        View Execution Progress
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -629,6 +960,278 @@ export default function CampaignDetailsPage() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'execution' && (
+          <div className="space-y-6">
+            {/* Progress Overview */}
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-[#041d36] flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  Execution Progress
+                  {campaign.status === 'running' && (
+                    <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 animate-pulse">
+                      ● Running
+                    </span>
+                  )}
+                </h3>
+                <button
+                  onClick={async () => { 
+                    await fetchCampaign();
+                    await fetchProgress(); 
+                    await fetchExecutions(); 
+                  }}
+                  disabled={progressLoading || executionsLoading}
+                  className="text-sm text-[#526bb0] hover:text-[#01adbd] flex items-center gap-1"
+                >
+                  <svg className={`w-4 h-4 ${progressLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Refresh
+                </button>
+              </div>
+
+              {progressLoading && !progress ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[#526bb0]"></div>
+                </div>
+              ) : progress ? (
+                <div className="space-y-6">
+                  {/* Progress Bar */}
+                  <div>
+                    <div className="flex justify-between text-sm mb-2">
+                      <span className="text-gray-600">Overall Progress</span>
+                      <span className="font-semibold text-[#041d36]">{progress.progressPercent}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+                      <div
+                        className="h-4 rounded-full transition-all duration-500 ease-out bg-gradient-to-r from-[#526bb0] to-[#01adbd]"
+                        style={{ width: `${progress.progressPercent}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  {/* Stats Grid */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-gray-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-[#041d36]">{(progress.totalRecipients || 0).toLocaleString()}</div>
+                      <div className="text-sm text-gray-600">Total Recipients</div>
+                    </div>
+                    <div className="bg-blue-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-blue-700">{(progress.processedCount || 0).toLocaleString()}</div>
+                      <div className="text-sm text-gray-600">Processed</div>
+                    </div>
+                    <div className="bg-green-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-green-700">{(progress.successCount || 0).toLocaleString()}</div>
+                      <div className="text-sm text-gray-600">Successful</div>
+                    </div>
+                    <div className="bg-red-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-red-700">{(progress.failedCount || 0).toLocaleString()}</div>
+                      <div className="text-sm text-gray-600">Failed</div>
+                    </div>
+                  </div>
+
+                  {/* Timeline */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {progress.scheduledAt && (
+                      <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <div className="text-sm font-medium text-gray-500 mb-1">Scheduled At</div>
+                        <div className="text-sm text-[#041d36]">{formatDate(progress.scheduledAt)}</div>
+                      </div>
+                    )}
+                    {progress.startedAt && (
+                      <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <div className="text-sm font-medium text-gray-500 mb-1">Started At</div>
+                        <div className="text-sm text-[#041d36]">{formatDate(progress.startedAt)}</div>
+                      </div>
+                    )}
+                    {progress.completedAt ? (
+                      <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <div className="text-sm font-medium text-gray-500 mb-1">Completed At</div>
+                        <div className="text-sm text-[#041d36]">{formatDate(progress.completedAt)}</div>
+                      </div>
+                    ) : progress.estimatedCompletion && (
+                      <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <div className="text-sm font-medium text-gray-500 mb-1">Est. Completion</div>
+                        <div className="text-sm text-[#041d36]">{formatDate(progress.estimatedCompletion)}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-3">
+                    {campaign.status === 'running' && (
+                      <button
+                        onClick={handlePauseCampaign}
+                        disabled={pauseResumeLoading}
+                        className="bg-yellow-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-yellow-600 transition-all disabled:bg-gray-400 flex items-center gap-2"
+                      >
+                        {pauseResumeLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-white"></div>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        Pause
+                      </button>
+                    )}
+
+                    {campaign.status === 'paused' && (
+                      <button
+                        onClick={handleResumeCampaign}
+                        disabled={pauseResumeLoading}
+                        className="bg-green-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-600 transition-all disabled:bg-gray-400 flex items-center gap-2"
+                      >
+                        {pauseResumeLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-white"></div>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                        Resume
+                      </button>
+                    )}
+
+                    {progress.failedCount > 0 && (
+                      <button
+                        onClick={handleRetryFailed}
+                        className="bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-orange-600 transition-all flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Retry Failed ({progress.failedCount})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-8 text-center">
+                  <div className="text-4xl mb-2">📊</div>
+                  <p className="text-gray-600">No execution data yet. Start the campaign to see progress.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Execution Records Table */}
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-[#041d36]">Execution Records</h3>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={executionFilter}
+                    onChange={(e) => { setExecutionFilter(e.target.value); setExecutionPage(1); }}
+                    className="px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#526bb0] focus:border-transparent outline-none text-sm text-[#041d36]"
+                  >
+                    <option value="">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="processing">Processing</option>
+                    <option value="success">Success</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                </div>
+              </div>
+
+              {executionsLoading && !executions ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[#526bb0]"></div>
+                </div>
+              ) : executions?.data?.length > 0 ? (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                            Email
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                            Name
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                            Status
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                            Attempts
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                            Last Attempt
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {executions.data.map((execution) => (
+                          <tr key={execution.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                              {execution.email}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                              {execution.name || '-'}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                execution.status === 'success'
+                                  ? 'bg-green-100 text-green-800'
+                                  : execution.status === 'failed'
+                                  ? 'bg-red-100 text-red-800'
+                                  : execution.status === 'processing'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {execution.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                              {execution.attempts}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                              {execution.processedAt ? formatDate(execution.processedAt) : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  {executions.totalPages > 1 && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                      <div className="text-sm text-gray-600">
+                        Page {executions.page} of {executions.totalPages} ({executions.total} total)
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setExecutionPage(p => Math.max(1, p - 1))}
+                          disabled={executionPage <= 1}
+                          className="px-3 py-1 border border-gray-300 rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          onClick={() => setExecutionPage(p => Math.min(executions.totalPages, p + 1))}
+                          disabled={executionPage >= executions.totalPages}
+                          className="px-3 py-1 border border-gray-300 rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-8 text-center">
+                  <div className="text-4xl mb-2">📋</div>
+                  <p className="text-gray-600">No execution records found.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -97,8 +97,10 @@ export default function UploadSegment() {
         },
       });
 
+      console.log('Upload response:', response.data);
+      const segmentData = response.data.data || response.data;
       setSuccess(
-        `Segment uploaded successfully! ${response.data.data.totalRecords} records found.`
+        `Segment uploaded successfully! ${segmentData.totalRecords} records found.`
       );
       setFile(null);
       setSegmentName('');
@@ -109,6 +111,7 @@ export default function UploadSegment() {
         router.push('/dashboard/segments');
       }, 2000);
     } catch (err) {
+      console.error('Upload error:', err);
       setError(
         err.response?.data?.message || 'Failed to upload segment. Please try again.'
       );

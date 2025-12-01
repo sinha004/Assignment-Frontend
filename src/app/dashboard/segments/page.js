@@ -29,10 +29,12 @@ export default function SegmentsList() {
     try {
       setLoading(true);
       const response = await api.get('/segments');
-      setSegments(response.data.data);
+      console.log('Segments API response:', response.data);
+      const segmentsData = response.data.data || response.data || [];
+      setSegments(Array.isArray(segmentsData) ? segmentsData : []);
     } catch (err) {
       setError('Failed to load segments');
-      console.error(err);
+      console.error('Segments fetch error:', err);
     } finally {
       setLoading(false);
     }
