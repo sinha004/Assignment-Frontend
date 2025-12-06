@@ -182,9 +182,30 @@ const nodePropertySchemas = {
   },
   sendEmail: {
     fields: [
-      { name: 'to', label: 'To', type: 'text', placeholder: '{{email}}' },
-      { name: 'subject', label: 'Subject', type: 'text', placeholder: 'Email subject' },
-      { name: 'body', label: 'Body', type: 'textarea', placeholder: 'Email content...' },
+      {
+        name: 'to',
+        label: 'To',
+        type: 'text',
+        placeholder: '{{email}}',
+        helpText:
+          'Use {{email}} to send to each contact in the selected segment.',
+      },
+      {
+        name: 'subject',
+        label: 'Subject',
+        type: 'text',
+        placeholder: 'Email subject',
+        helpText:
+          'You can personalise with variables like {{name}} in the subject.',
+      },
+      {
+        name: 'body',
+        label: 'Body',
+        type: 'textarea',
+        placeholder: 'Email content...',
+        helpText:
+          'Use {{name}} and {{email}} anywhere in the content to insert recipient data.',
+      },
     ],
   },
   wait: {
@@ -195,9 +216,22 @@ const nodePropertySchemas = {
   },
   condition: {
     fields: [
-      { name: 'field', label: 'Field', type: 'text', placeholder: '{{hasReply}}' },
+      {
+        name: 'field',
+        label: 'Field',
+        type: 'text',
+        placeholder: '{{hasReply}}',
+        helpText:
+          'Use a variable from previous nodes, e.g. {{hasReply}} or {{opens}}.',
+      },
       { name: 'operator', label: 'Operator', type: 'select', options: ['equals', 'notEquals', 'contains', 'greaterThan', 'lessThan'] },
-      { name: 'value', label: 'Value', type: 'text', placeholder: 'value to compare' },
+      {
+        name: 'value',
+        label: 'Value',
+        type: 'text',
+        placeholder: 'value to compare',
+        helpText: 'The value you want to compare the field against.',
+      },
     ],
   },
   getSegmentData: {
@@ -355,6 +389,11 @@ function PropertyEditor({ selectedNode, onUpdate, onClose }) {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {field.label}
             </label>
+            {field.helpText && (
+              <p className="text-xs text-gray-500 mb-1">
+                {field.helpText}
+              </p>
+            )}
             
             {field.type === 'text' && (
               <input
